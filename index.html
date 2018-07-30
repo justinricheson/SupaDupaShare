@@ -17,16 +17,20 @@
             </div>
             <div class="row">
                 <input id="sessionid" type="text" disabled>
-                <input id="isdevice" type="checkbox"> Is Device</input>
+                <input id="isguest" type="checkbox"> Is Guest</input>
             </div>
             <div class="row">
                 <input id="startshare" type="button" class="btn btn-primary" value='Start Share'>
             </div>
+                <div id="video">
+				  <video id="remotevideo" autoplay="true" controls="true" muted="true" width="480" height="360"></video>
+				  <video id="localvideo" autoplay="true" controls="true" muted="true" width="160" height="120"></video>
+				</div>
             <div class="row">
                 <h3>Log</h3>
                 <ul id="log"></ul>
             </div>
-        </div>    
+        </div>
         <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/2.2.0/jquery.min.js"></script>
         <script src="bundle.js"></script
     </body>

@@ -2,11 +2,44 @@
 
 const awsIot = require('aws-iot-device-sdk');
 
-var syncId;
-let client;
-const IoT = {
+let localStream;
+let peerConnection;
+const webrtc = {
+    initCall: function() {
+        peerConnection = new RTCPeerConnection({
+            'iceServers': [
+                {'url': 'stun:stun.services.mozilla.com'},
+                {'url': 'stun:stun.l.google.com:19302'}
+            ]
+        });
+        peerConnection.onicecandidate = (event) => {
+            if(event.candidate != null) {
+                iot.send(getRemoteTopic(), JSON.stringify({
+                    'ice': event.candidate}));
+            }
+        };
+        peerConnection.onaddstream = (event) => {
+            $('#remotevideo').prop('src', window.URL.createObjectURL(event.stream));
+        };
+        peerConnection.addStream(localStream);
+    },
 
-    connect: (topic, iotEndpoint, region, accessKey, secretKey, sessionToken) => {
+    createOffer: function() {
+        peerConnection.createOffer((description) => {
+            peerConnection.setLocalDescription(description, function () {
+                iot.send(getRemoteTopic(), JSON.stringify({'sdp': description}));
+            }, function() { addLog('Error setting description'); });
+        }, (error) => { addLog(error); });
+    }
+};
+
+let syncId;
+let client;
+let gotMessage;
+let syncSent = 0;
+const iot = {
+
+    connect: (iotEndpoint, region, accessKey, secretKey, sessionToken) => {
         client = awsIot.device({
             region: region,
             protocol: 'wss',
@@ -33,29 +66,63 @@ const IoT = {
 }; 
 
 const onConnect = () => {
-    client.subscribe(getLocalTopic());
     addLog('Signal channel connected');
 
+    let localTopic = getLocalTopic();
+    addLog("Subscribing to topic: " + localTopic);
+    client.subscribe(localTopic);
+
     syncId = setInterval(function(){
-        IoT.send(getRemoteTopic(), "SYNC");
+        if (gotMessage) {
+            if (syncSent == 3) {
+                clearInterval(syncId);
+                return;
+            }
+
+            syncSent++;
+        }
+
+        iot.send(getRemoteTopic(), "SYNC");
     }, 500);
 };
 
 const onMessage = (topic, message) => {
     addLog("Received message: " + message);
 
-    if (message == "SYNC") {
-        clearInterval(syncId);
-        IoT.send(getRemoteTopic(), newSessionId());
+    if (!gotMessage) {
+        gotMessage = true;
+        webrtc.initCall();
+        if (!isGuest()) {
+            webrtc.createOffer();
+        }
+    }
+
+    if (message != "SYNC") {
+        var signal = JSON.parse(message);
+        if(signal.sdp) {
+            peerConnection.setRemoteDescription(new RTCSessionDescription(signal.sdp), function() {
+                if(signal.sdp.type == 'offer') {
+                    peerConnection.createAnswer((description) => {
+                        peerConnection.setLocalDescription(description, function () {
+                            iot.send(getRemoteTopic(), JSON.stringify({'sdp': description}));
+                        }, () => { addLog('Error setting description'); });
+                    }, (error) => { addLog(error); });
+                }
+            });
+        } else if(signal.ice) {
+            peerConnection.addIceCandidate(new RTCIceCandidate(signal.ice));
+        }
     }
 };
 
 const onError = (err) => {
     addLog("Error: " + err);
 };
+
 const onReconnect = () => {
 	addLog("Reconnected");
 };
+
 const onOffline = () => {
 	addLog("Offline")
 };
@@ -65,20 +132,23 @@ const onClose = () => {
 };
 
 $(document).ready(() => {
+    disableUI();
+
+    navigator.getUserMedia({
+        video: true,
+        audio: false,
+    }, getUserMediaSuccess, getUserMediaError);
+
     $('#sessionid').val(newSessionId());
 
     $('#startshare').on('click', () => {
         addLog("Connecting...")
-        $('#startshare').prop('disabled', true);
-        $('#sessionid').prop('disabled', true);
-        $('#isdevice').prop('disabled', true);
+        disableUI();
 
         $.ajax({
             url: 'https://8zzjkfhme0.execute-api.us-east-2.amazonaws.com/prod/credentials',
             success: (res) => {
-                var localTopic = getLocalTopic();
-                addLog("Subscribing to topic: " + localTopic);
-                IoT.connect(localTopic,
+                iot.connect(
                     res.iotEndpoint, 
                     res.region, 
                     res.accessKey, 
@@ -88,22 +158,48 @@ $(document).ready(() => {
         });
     });
 
-    $('#isdevice').on('click', () => {
-        var checked = $("#isdevice").prop('checked');
-        $('#sessionid').prop('disabled', !checked);
-    });  
+    $('#isguest').on('click', () => {
+        $('#sessionid').prop('disabled', !isGuest());
+    }); 
 });
 
+const getUserMediaSuccess = (stream) => {
+    enableUI();
+
+    localStream = stream;
+    $('#localvideo').prop('src', window.URL.createObjectURL(stream));
+}
+
+const getUserMediaError = () => {
+    addLog("Error getting user media");
+}
+
+const enableUI = () => {
+    $('#startshare').prop('disabled', false);
+    $('#sessionid').prop('disabled', !isGuest());
+    $('#isguest').prop('disabled', false);
+}
+
+const disableUI = () => {
+    $('#startshare').prop('disabled', true);
+    $('#sessionid').prop('disabled', true);
+    $('#isguest').prop('disabled', true);
+}
+
 const getRemoteTopic = () => {
-    return getTopicBase() + ($('#isdevice').prop('checked') ? 'b' : 'a');
+    return getTopicBase() + (isGuest() ? 'b' : 'a');
 }
 
 const getLocalTopic = () => {
-    return getTopicBase() + ($('#isdevice').prop('checked') ? 'a' : 'b');
+    return getTopicBase() + (isGuest() ? 'a' : 'b');
 }
 
 const getTopicBase = () => {
     return '/supadupashare/' + $('#sessionid').val() + '/';
+}
+
+const isGuest = () => {
+    return $('#isguest').prop('checked');
 }
 
 const newSessionId = () => {
