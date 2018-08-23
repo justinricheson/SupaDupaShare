@@ -4,16 +4,29 @@ const awsIot = require('aws-iot-device-sdk');
 
 let localStream;
 let peerConnection;
+let peerConnectionConfig = {
+    'iceServers': [
+        {
+            'urls': '',
+            'username': 'TEST',
+            'credential': 'TEST'
+        }
+    ]
+};
+let peerConnectionOptionalConfig = {
+    'optional': [{DtlsSrtpKeyAgreement: true}] // Danger, Will Robinson!
+};
 const webrtc = {
     initCall: function() {
-        peerConnection = new RTCPeerConnection({
-            'iceServers': [
-                {'url': 'stun:stun.services.mozilla.com'},
-                {'url': 'stun:stun.l.google.com:19302'}
-            ]
-        });
+        peerConnection = new RTCPeerConnection(peerConnectionConfig, peerConnectionOptionalConfig);
         peerConnection.onicecandidate = (event) => {
-            if(event.candidate != null) {
+            if(event.candidate.candidate != null) {
+                var candidate = event.candidate.candidate;
+                if(candidate.indexOf("relay") < 0){
+                    addLog("Skipping sending non-TURN candidate")
+                    return;
+                }
+
                 iot.send(getRemoteTopic(), JSON.stringify({
                     'ice': event.candidate}));
             }
@@ -148,6 +161,8 @@ $(document).ready(() => {
         $.ajax({
             url: 'https://8zzjkfhme0.execute-api.us-east-2.amazonaws.com/prod/credentials',
             success: (res) => {
+                peerConnectionConfig.iceServers[0].urls
+                    = 'turn:' + res.turnServers[0] + ':3478?transport=udp';
                 iot.connect(
                     res.iotEndpoint, 
                     res.region, 
