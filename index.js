@@ -5,13 +5,7 @@ const awsIot = require('aws-iot-device-sdk');
 let localStream;
 let peerConnection;
 let peerConnectionConfig = {
-    'iceServers': [
-        {
-            'urls': '',
-            'username': 'TEST',
-            'credential': 'TEST'
-        }
-    ]
+    'iceServers': []
 };
 let peerConnectionOptionalConfig = {
     'optional': [{DtlsSrtpKeyAgreement: true}] // Danger, Will Robinson!
@@ -19,8 +13,18 @@ let peerConnectionOptionalConfig = {
 const webrtc = {
     initCall: function() {
         peerConnection = new RTCPeerConnection(peerConnectionConfig, peerConnectionOptionalConfig);
+		peerConnection.oniceconnectionstatechange = function(event) {
+			addLog("Media connection state: " + peerConnection.iceConnectionState);
+			if (peerConnection.iceConnectionState === "failed" ||
+				peerConnection.iceConnectionState === "disconnected" ||
+				peerConnection.iceConnectionState === "closed") {
+				addLog("Detected media channel error");
+				connectMedia();
+			}
+		};
+
         peerConnection.onicecandidate = (event) => {
-            if(event.candidate.candidate != null) {
+            if(event.candidate != null && event.candidate.candidate != null) {
                 var candidate = event.candidate.candidate;
                 if(candidate.indexOf("relay") < 0){
                     addLog("Skipping sending non-TURN candidate")
@@ -99,6 +103,12 @@ const onConnect = () => {
     }, 500);
 };
 
+const connectMedia = () => {
+    if (!isGuest()) {
+        webrtc.createOffer();
+    }
+}
+
 const onMessage = (topic, message) => {
     addLog("Received message: " + message);
 
@@ -106,7 +116,7 @@ const onMessage = (topic, message) => {
         gotMessage = true;
         webrtc.initCall();
         if (!isGuest()) {
-            webrtc.createOffer();
+            connectMedia();
         }
     }
 
@@ -161,8 +171,15 @@ $(document).ready(() => {
         $.ajax({
             url: 'https://8zzjkfhme0.execute-api.us-east-2.amazonaws.com/prod/credentials',
             success: (res) => {
-                peerConnectionConfig.iceServers[0].urls
-                    = 'turn:' + res.turnServers[0] + ':3478?transport=udp';
+            	res.turnServers.forEach(turnServer => {
+	                peerConnectionConfig.iceServers.push(
+            	        {
+				            'urls': 'turn:' + turnServer + ':3478?transport=udp',
+				            'username': 'TEST',
+				            'credential': 'TEST'
+				        });
+            	});
+
                 iot.connect(
                     res.iotEndpoint, 
                     res.region, 
